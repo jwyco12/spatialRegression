@@ -1,0 +1,290 @@
+---
+title: "Spatial Mapping"
+author: "Jacob Wyco"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: TRUE
+    self_contained: TRUE
+    df_print: paged
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r map packages, echo=FALSE, message=FALSE}
+packages <- c("biscale", "car", "cleangeo", "cowplot", "geosphere", "maps",
+
+"mapproj", "spatialreg", "spdep", "sf", "tidyverse","visreg")
+
+sapply(packages, require, character.only=T)
+
+```
+
+
+
+
+```{r data entry, echo=FALSE}
+data <- read.csv('https://raw.githubusercontent.com/chrismgentry/Spatial-Regression/master/Data/childpov18_southfull.csv', 
+                 colClasses = c("character", "character", "character", 
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric", 
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric", 
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric"))
+
+
+names(data)[names(data)=="X2016.child.poverty"] <- "child.pov.2016"
+
+tn_pov <- data %>% subset(State == "TN")
+```
+
+
+
+```{r summary, echo=FALSE}
+summary(tn_pov)
+
+```
+
+
+```{r ordinary, echo=FALSE}
+equation <- child.pov.2016 ~ rural + urban + lnmanufacturing + lnag + 
+  lnretail + lnhealthss + lnconstruction + lnlesshs + 
+  lnunemployment + lnsinglemom + lnblack + lnhispanic + 
+  lnuninsured + lnincome_ratio + lnteenbirth + lnunmarried
+
+options(scipen = 5)
+
+ols <- lm(equation, data=tn_pov)
+summary(ols)
+```
+
+
+```{r visreg, echo=FALSE}
+par(mfrow=c(4,4), mar=c(2, 2, 2, 2))
+visreg(ols)
+```
+
+
+```{r county, echo=FALSE}
+fips <- county.fips
+fips.codes <- separate(data = fips, col = polyname, into = c("state", "county"), sep = ",")
+tn_fips <- subset(fips.codes, state=="tennessee", select=fips)
+
+```
+
+```{r sf, echo=FALSE}
+se_shp <- st_read(file.path("./se_counties.shp"))
+
+tn_sf <- se_shp %>% subset(STATE_NAME == "Tennessee")
+```
+
+```{r sdep, echo=FALSE}
+neighb.data <- poly2nb(tn_sf, queen=T)
+cont.neighb <- nb2listw(neighb.data,style="W", zero.policy = TRUE)
+```
+
+```{r morantes, echo=FALSE}
+lm.morantest(ols, cont.neighb)
+```
+
+```{r lm, echo=FALSE}
+
+lm.LMtests(ols, cont.neighb, test="all")
+```
+
+
+```{r SLX, echo=FALSE}
+SLX.model <- spatialreg::lmSLX(equation, data=tn_pov, cont.neighb)
+
+summary(SLX.model)
+
+```
+
+
+```{r slx sum, echo=FALSE}
+summary(spatialreg::impacts(SLX.model, cont.neighb), zstats = TRUE)[["pzmat"]]
+```
+
+```{r lag, echo=FALSE}
+sp.lag.model <- spatialreg::lagsarlm(equation, data=tn_pov, cont.neighb)
+
+summary(sp.lag.model, Nagelkerke = TRUE)
+```
+
+```{r lag sum, echo=FALSE}
+summary(spatialreg::impacts(sp.lag.model, listw = cont.neighb, R=100), zstats = TRUE)[["pzmat"]]
+
+```
+
+```{r err.model, echo=FALSE}
+sp.err.model <- spatialreg::errorsarlm(equation, data=tn_pov, cont.neighb)
+
+summary(sp.err.model, Nagelkerke = TRUE)
+
+```
+
+```{r err haus, echo=FALSE}
+spatialreg::Hausman.test(sp.err.model)
+```
+
+```{r mixed/emixed, echo=FALSE}
+sd.err <- spatialreg::errorsarlm(equation, tn_pov, cont.neighb, etype = "emixed")
+sdm <- spatialreg::lagsarlm(equation, tn_pov, cont.neighb, type = "mixed")
+summary(sd.err, Nagelkerke = TRUE)
+```
+
+```{r sd.err sum, echo=FALSE}
+summary(spatialreg::impacts(sd.err, listw = cont.neighb, R = 100), zstats = TRUE)[["pzmat"]]
+
+```
+
+```{r sarlm, echo=FALSE}
+spatialreg::LR.Sarlm(sd.err,sp.err.model)
+```
+
+```{r centroid, warning=FALSE}
+tn.xy <- st_centroid(tn_sf)
+
+```
+
+```{r k, echo=FALSE, warning=FALSE}
+all.dist.k1 <- knn2nb(knearneigh(tn.xy, k=1, longlat = TRUE))
+
+all.dist.k3 <- knn2nb(knearneigh(tn.xy, k=3, longlat = TRUE))
+
+all.dist.k5 <- knn2nb(knearneigh(tn.xy, k=5, longlat = TRUE))
+```
+
+```{r max, echo=FALSE, warning=FALSE}
+all.max.k1 <- max(unlist(nbdists(all.dist.k1, tn.xy, longlat=TRUE)))
+
+all.max.k3 <- max(unlist(nbdists(all.dist.k3, tn.xy, longlat=TRUE)))
+
+all.max.k5 <- max(unlist(nbdists(all.dist.k5, tn.xy, longlat=TRUE)))
+
+```
+
+
+```{r distance neighbors, echo=FALSE, warning=FALSE}
+all.sp.dist.k1 <- dnearneigh(tn.xy, d1=0, d2=1 * all.max.k1, longlat = TRUE)
+
+all.sp.dist.k3 <- dnearneigh(tn.xy, d1=0, d2=1 * all.max.k3, longlat = TRUE)
+
+all.sp.dist.k5 <- dnearneigh(tn.xy, d1=0, d2=1 * all.max.k5, longlat = TRUE)
+```
+
+```{r list neighbor, echo=FALSE}
+all.dist.neighb.k1 <- nb2listw(all.sp.dist.k1,style="W", zero.policy = TRUE)
+
+all.dist.neighb.k3 <- nb2listw(all.sp.dist.k3,style="W", zero.policy = TRUE)
+
+all.dist.neighb.k5 <- nb2listw(all.sp.dist.k5,style="W", zero.policy = TRUE)
+
+all.dist.lag.k1 <- spatialreg::lagsarlm(equation, data = tn_pov, listw = all.dist.neighb.k1)
+
+all.dist.lag.k3 <- spatialreg::lagsarlm(equation, data = tn_pov, listw = all.dist.neighb.k3)
+
+all.dist.lag.k5 <- spatialreg::lagsarlm(equation, data = tn_pov, listw = all.dist.neighb.k5)
+```
+
+
+```{r sum neighbor, echo=FALSE}
+summary(all.dist.lag.k1, Nagelkerke = TRUE)
+
+```
+
+```{r dst err, echo=FALSE}
+all.dist.err.k1 <- spatialreg::errorsarlm(equation, data = tn_pov, listw = all.dist.neighb.k1)
+
+all.dist.err.k3 <- spatialreg::errorsarlm(equation, data = tn_pov, listw = all.dist.neighb.k3)
+
+all.dist.err.k5 <- spatialreg::errorsarlm(equation, data = tn_pov, listw = all.dist.neighb.k5)
+
+```
+
+
+```{r sum dist err, echo=FALSE}
+summary(all.dist.err.k1, Nagelkerke = TRUE)
+```
+
+```{r dist out, echo=FALSE}
+dist.err.data <- summary(all.dist.err.k1, correlation=TRUE, Nagelkerke = TRUE)
+
+dist.err.output <- cbind.data.frame(tn_pov$FIPS,
+
+dist.err.data$fitted.values,
+
+dist.err.data$residual,
+
+tn_pov$child.pov.2016,
+
+tn_pov$lnsinglemom,
+
+tn_pov$lnuninsured,
+
+tn_pov$lnlesshs,
+
+tn_pov$lnincome_ratio,
+
+stringsAsFactors = FALSE)
+```
+
+
+```{r column rename}
+colnames(dist.err.output) <- c("fips","fitted","resid","childpov",
+
+"single_mom","uninsured","less_hs","income_ratio")
+
+tn_poly <- merge(x = tn_sf, y = dist.err.output,
+
+by.x = "FIPS", by.y = "fips", all = TRUE)
+```
+
+```{r bivar}
+bivariate_data <- bi_class(tn_poly, x = childpov, y = income_ratio,
+dim = 3, style = "quantile")
+legend <- bi_legend(pal = "DkViolet",
+dim = 3,
+xlab = "Child Poverty",
+ylab = "INcome Ratio",
+size = 6)
+world <- map_data("world")
+states <- map_data("state")
+southern_states <- subset(states, region %in%
+c("texas", "arkansas", "louisiana", "mississippi",
+"alabama", "georgia", "florida", "north carolina",
+"south carolina", "tennessee", "oklahoma",
+"kentucky", "west virginia", "virginia",
+"maryland", "delaware", "district of columbia"))
+```
+
+
+```{r gg map}
+IN_pov_map <- ggplot() +
+geom_polygon(data = world, aes(x=long,y=lat, group=group), fill = "gray95", color = "white") +
+geom_polygon(data = states, aes(x=long,y=lat, group=group), fill = "gray", color = "white") +
+geom_polygon(data = southern_states, aes(x=long,y=lat, group=group), fill = NA, size = 0.02, color = "white") +
+geom_sf(data = bivariate_data, aes(fill = bi_class), color = "grey50", show.legend = FALSE) +
+bi_scale_fill(pal = "DkViolet", dim = 3) +
+coord_sf(crs = 4326, xlim=c(-90,-82), ylim=c(35,38)) + theme_void() + theme(legend.title.align=0.5) +
+theme(panel.background = element_rect(fill = 'blue'),
+panel.grid.major = element_line(colour = NA)) +
+labs(x = "Longitude", y = "Latitude", fill = "Child Poverty",
+title = "Bivariate Map of Child Poverty and Income Ratio") +
+theme(plot.title = element_text(face = "bold", hjust = 0.5))
+IN_pov_map
+
+```
+
+```{r cowplot}
+final_map <- ggdraw() +
+draw_plot(IN_pov_map, 0, 0, 1, 1) +
+draw_plot(legend, 0.80, 0.50, 0.20, 0.20)
+final_map
+
+```

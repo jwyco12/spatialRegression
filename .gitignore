@@ -47,3 +47,8 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# To ignore
+_MACOSX/
+spatialRegression.Rproj
+
